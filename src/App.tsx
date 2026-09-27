@@ -1,128 +1,101 @@
+import { useEffect, useMemo, useState } from "react";
+import { ORDERS, PARCELS } from "./data/archive";
+import {
+  allocateOrders,
+  evaluateParcels,
+  type EvaluatedStone,
+} from "./rules/sorting";
+import StatsBar from "./components/StatsBar";
+import FilterBar, { type StatusFilter } from "./components/FilterBar";
+import StoneTable from "./components/StoneTable";
+import OrderBoard from "./components/OrderBoard";
 import "./styles.css";
 
-const project = {
-  "sourceNo": 8,
-  "id": "hxyfront-62006",
-  "port": 62006,
-  "title": "珠宝镶嵌宝石分拣",
-  "domain": "珠宝镶嵌",
-  "prompt": "我需要一个面向珠宝镶嵌工作室的宝石分拣前端系统，可以记录宝石编号、种类、形状、克拉重量、尺寸、净度、颜色、切工、镶嵌位置和分拣状态。页面需要有分拣批次、尺寸筛选、镶嵌位置示意图、缺陷备注和按订单查看的宝石清单。",
-  "palette": [
-    "#be123c",
-    "#0f766e",
-    "#a855f7"
-  ],
-  "metrics": [
-    "分拣批次",
-    "待镶嵌",
-    "缺陷备注",
-    "总克拉"
-  ],
-  "filters": [
-    "圆形",
-    "椭圆",
-    "梨形",
-    "祖母绿切"
-  ],
-  "fields": [
-    "宝石编号",
-    "种类",
-    "形状",
-    "克拉重量",
-    "尺寸",
-    "镶嵌位置"
-  ],
-  "records": [
-    [
-      "ST-2048",
-      "蓝宝石",
-      "椭圆6x4mm",
-      "主石位"
-    ],
-    [
-      "ST-2061",
-      "钻石",
-      "圆形0.08ct",
-      "围石A组"
-    ],
-    [
-      "ST-2099",
-      "祖母绿",
-      "内含物明显",
-      "需客户确认"
-    ]
-  ]
-};
+// 数据只存浏览器：人工核对结果保存在 localStorage，刷新/重开不丢
+const STORAGE_KEY = "gem-sorting-desk.approved.v1";
 
-function App() {
+function loadApproved(): Set<string> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export default function App() {
+  const [approved, setApproved] = useState<Set<string>>(loadApproved);
+  const [parcelFilter, setParcelFilter] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([...approved]));
+  }, [approved]);
+
+  const stones = useMemo(() => evaluateParcels(PARCELS, approved), [approved]);
+  const orders = useMemo(() => allocateOrders(ORDERS, stones), [stones]);
+
+  const visibleStones = stones.filter(
+    (s) =>
+      (parcelFilter === "ALL" || s.parcelNo === parcelFilter) &&
+      (statusFilter === "ALL" || s.status === statusFilter),
+  );
+
+  const handleApprove = (stone: EvaluatedStone) => {
+    const message = [
+      `确认核对通过 ${stone.id}（${stone.parcelNo}）？`,
+      "",
+      "该石头存在以下问题：",
+      ...stone.reasons.map((r) => `· ${r}`),
+      "",
+      "通过后若质量合格将转为「待镶嵌」并占用订单镶位。",
+    ].join("\n");
+    if (window.confirm(message)) {
+      setApproved((prev) => new Set(prev).add(stone.key));
+    }
+  };
+
+  const handleRevoke = (stone: EvaluatedStone) => {
+    setApproved((prev) => {
+      const next = new Set(prev);
+      next.delete(stone.key);
+      return next;
+    });
+  };
+
+  const handleReset = () => {
+    if (window.confirm("清空浏览器中保存的全部人工核对记录，恢复到货初始状态？")) {
+      setApproved(new Set());
+    }
+  };
+
   return (
     <main className="app">
-      <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
-      </section>
-
-      <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[86, 14, 7, 32][index] ?? 12}</strong>
-          </article>
-        ))}
-      </section>
-
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}筛选</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存草稿</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>历史记录</p>
-            <h2>近期工作台</h2>
-          </div>
-          <button>导出摘要</button>
+      <header className="hero">
+        <div>
+          <p>珠宝镶嵌 · 收货质检</p>
+          <h1>到货分拣台</h1>
+          <span>
+            供应商裸石到包后先登记核对：证书重号、腰码缺失、编号跨包重复的石头留在待核对，不占订单镶位；
+            核对通过转待镶嵌；尺寸超公差或色级不足的标记换货，原记录保留。数据仅保存在本浏览器。
+          </span>
         </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      </header>
+
+      <StatsBar stones={stones} orders={orders} />
+
+      <FilterBar
+        parcelNos={PARCELS.map((p) => p.parcelNo)}
+        parcelFilter={parcelFilter}
+        statusFilter={statusFilter}
+        onParcelChange={setParcelFilter}
+        onStatusChange={setStatusFilter}
+        onReset={handleReset}
+      />
+
+      <StoneTable stones={visibleStones} onApprove={handleApprove} onRevoke={handleRevoke} />
+
+      <OrderBoard orders={orders} />
     </main>
   );
 }
-
-export default App;
